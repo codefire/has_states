@@ -78,7 +78,7 @@ protected
   end
 end
 
-ActiveRecord::Base.establish_connection(:adapter => "sqlite3", :dbfile => ":memory:")
+ActiveRecord::Base.establish_connection(:adapter => "sqlite3", :database => ":memory:")
 
 class Ticket < ActiveRecord::Base
   validates_presence_of :problem

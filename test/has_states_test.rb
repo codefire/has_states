@@ -57,7 +57,9 @@ protected
       create_table :tickets do |t|
         t.column :type, :string
         t.column :state, :string, :default => 'open'
+        t.column :state_changed_at, :timestamp
         t.column :other_state, :string
+        t.column :other_state_changed_at, :timestamp
         t.column :problem, :string
         t.column :resolution, :string
         t.column :assigned_to, :string
@@ -215,6 +217,18 @@ protected
 
   def is_resolved
     remember_callback(:is_resolved)
+  end
+end
+
+class TicketWithStateExpiration < Ticket
+  has_states :open, :active, :stale do
+    expires :open => :stale, :after => 30.days
+    on :activate do
+      transition :open => :active
+    end
+    on :stale do
+      transition :resolved => :active, :abandoned => :active
+    end
   end
 end
 
@@ -473,4 +487,70 @@ class ConcurrentStatesTest < Test::Unit::TestCase
     assert ticket.unassigned?
     assert ! ticket.assigned?
   end
+end
+
+class ExpiredStatesTest < Test::Unit::TestCase
+  def setup
+    setup_db
+  end
+
+  def teardown
+    teardown_db
+  end
+
+  def test_correctly_define_expiration
+    expiration_event = TicketWithStateExpiration.state_expiration_events[:state][:open]
+    assert_not_nil expiration_event
+    assert 30.days, expiration_event.expiry
+    assert :open, expiration_event.from
+    assert_not_nil expiration_event.transition
+  end
+
+  def test_should_correctly_save_changed_at
+    ticket = create(TicketWithState)
+    ticket.ignore
+    assert_not_nil ticket.state_changed_at
+    assert ticket.state_changed_at < Time.now.utc
+  end
+
+  def test_should_overwrite_changed_at
+    ticket = create(TicketWithState)
+    ticket.activate
+    current_changed_at = ticket.state_changed_at
+    ticket.abandon
+    assert_not_equal current_changed_at, ticket.state_changed_at
+  end
+
+  def test_should_correctly_calculate_expiry
+    ticket = create(TicketWithStateExpiration)
+    ticket.activate
+    ticket.update_attribute :state_changed_at, 31.days.ago
+    assert ticket.open_state_expired?
+    ticket.update_attribute :state_changed_at, 10.days.ago
+    assert !ticket.open_state_expired?
+  end
+
+  def test_state_expired_name_should_should_return_results
+    ticket = create(TicketWithStateExpiration)
+
+    ticket.update_attribute :state_changed_at, 31.days.ago
+
+    puts TicketWithStateExpiration.find(:all).inspect
+    expired_records = TicketWithStateExpiration.with_expired_open_state.find(:all, :conditions => { :foo => :bar })
+    assert expired_records.include?(ticket)
+
+    ticket.update_attribute :state_changed_at, 29.days.ago
+    expired_records = TicketWithStateExpiration.with_expired_open_state.find(:all)
+    assert !expired_records.include?(ticket)
+  end
+
+  def test_should_automatically_expire_states
+    ticket = create(TicketWithStateExpiration)
+    ticket.activate
+    ticket.update_attribute :state_changed_at, 31.days.ago
+    TicketWithStateExpiration.expire_state(:state)
+    ticket.reload
+    assert_equal "stale", ticket.state
+  end
+
 end

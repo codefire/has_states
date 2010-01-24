@@ -83,6 +83,50 @@ module ActiveRecord
           end
         end
       end
+
+      def expires(options)
+        raise ArgumentError, ":after is required when expiring states" unless options.include?(:after)
+        expiry = options.delete(:after)
+        guard = options.delete(:if)
+        options.each_pair do |from, to|
+          StateExpiration.new(from, to, expiry, guard, @model, @column_name)
+        end
+      end
+
+      class StateExpiration
+
+        attr_reader :from, :transition, :expiry
+
+        def initialize(from, to, expiry, guard, model, column_name)
+          @from = from
+          @transition = Event::Transition.new(from, to, guard)
+          @expiry = expiry
+          @model = model
+          @column_name_state = column_name.to_s
+          @column_name_expiration = "#{@column_name_state}_changed_at"
+
+          @model.state_expiration_events[column_name.to_sym] ||= {}
+          @model.state_expiration_events[column_name.to_sym][from.to_sym] = self
+
+          method_name = "#{@from}_#{column_name}_expired?"
+          unless @model.method_defined?(method_name.to_sym)
+            @model.class_eval "def #{method_name}; state_machine_expired?('#{column_name}', #{@expiry.to_i}); end", __FILE__, __LINE__
+          end
+
+          named_scope_name = "with_expired_#{@from}_#{column_name}".to_sym
+          unless @model.respond_to?(named_scope_name)
+            @model.class_eval %Q(named_scope :#{named_scope_name}, lambda { { 
+              :conditions => [ " ( #{column_name}_changed_at < ? AND #{column_name} = ? ) ", Time.now.utc - #{@expiry}, "#{from.to_s}" ] } 
+            }), __FILE__, __LINE__
+          end
+        end
+
+        def state_expired?(record)
+          changed_at = record.send(@column_name_expiration)
+          (changed_at + @expiry).utc < Time.now
+        end
+
+      end
       
       class Event
         attr_reader :name, :transitions, :column_name
@@ -144,6 +188,7 @@ module ActiveRecord
     end
 
     module HookMethod
+
       def has_states(*state_names, &block)
         include InstanceMethods unless self.respond_to?(:state_machines)
 
@@ -152,8 +197,35 @@ module ActiveRecord
 
         StateMachine.new(self, state_column, state_names, &block)
       end
+
+      def expire_state(*state_names)
+
+        # We first do a parse of all the states, and make sure we have
+        # expiry scopes for them.
+        state_names.each do |state_name|
+          raise(ArgumentError, "no expiry events defined for: #{state_name}") unless self.state_expiration_events[state_name.to_sym]
+        end
+
+        state_names.each do |state_name|
+
+          # Now the magic happens. I loop through all the expiration
+          # events, and see if any are expired, if they are, then I do my
+          # thang.
+          events = self.state_expiration_events[state_name]
+
+          events.each_pair do |key, value|
+            puts key
+            puts value
+
+            # self.send(:"with_expired_#{state_name}").find_in_batches do |group|
+          end
+
+        end
+
+      end
       
       module InstanceMethods
+
         def self.included(base)
           base.extend ClassMethods
         end
@@ -163,6 +235,12 @@ module ActiveRecord
         end
         
       protected
+
+        def state_machine_expired?(column_name, expiry)
+          changed_at = self.send("#{column_name}_changed_at")
+          (changed_at + expiry).utc < Time.now
+        end
+
         def fire_event(event_name, save_method)
           event = self.class.state_events[event_name] || raise(ArgumentError, "unknown event: #{event_name}")
           attr_name = event.column_name
@@ -171,6 +249,8 @@ module ActiveRecord
           elsif transitions = event.transitions[send(attr_name)]
             if transition = transitions.find { |t| t.guard?(self) }
               state = send("#{attr_name}=", transition.to_state)
+              changed_at_column = "#{attr_name}_changed_at="
+              send(changed_at_column, Time.now.utc) if self.respond_to?(changed_at_column)
             else
               @event_error = [ :guarded_event, event ]
             end
@@ -189,6 +269,10 @@ module ActiveRecord
           
           def state_events
             @state_events ||= {}
+          end
+
+          def state_expiration_events
+            @state_expiration_events ||= {}
           end
           
           def validates_state_of(*attr_names)

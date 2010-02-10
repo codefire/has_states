@@ -21,7 +21,7 @@ module ActiveRecord
         @model = model
         @column_name = column_name.to_s
         @state_names = []
-        @transitions = {}
+        @transitions = HashWithIndifferentAccess.new
         
         @model.state_machines[@column_name] = self
 
@@ -70,13 +70,13 @@ module ActiveRecord
       end
       
       def transition?(from, to)
-        @transitions[from].include?(to)
+        @transitions[from].try(:include?, to)
       end
       
     protected
       def on(event_name, &block)
         Event.new(event_name, @model, @column_name, &block).transitions.each do |from,from_transitions|
-          @transitions[from] ||= {}
+          @transitions[from] ||= HashWithIndifferentAccess.new
           from_transitions.each do |transition|
             @transitions[from][transition.to_state] ||= []
             @transitions[from][transition.to_state] << transition
@@ -89,17 +89,20 @@ module ActiveRecord
         expiry = options.delete(:after)
         guard = options.delete(:if)
         options.each_pair do |from, to|
-          StateExpiration.new(from, to, expiry, guard, @model, @column_name)
+          expiration = StateExpiration.new(from, to, expiry, guard, @model, @column_name)
+          @transitions[from] ||= HashWithIndifferentAccess.new
+          @transitions[from][expiration.transition.to_state] ||= []
+          @transitions[from][expiration.transition.to_state] << expiration.transition
         end
       end
 
       class StateExpiration
 
-        attr_reader :from, :transition, :expiry
+        attr_reader :from, :transition, :expiry, :named_scope_name, :expire_state_method_name
 
         def initialize(from, to, expiry, guard, model, column_name)
           @from = from
-          @transition = Event::Transition.new(from, to, guard)
+          @transition = Event::Transition.new(from.to_s, to.to_s, guard)
           @expiry = expiry
           @model = model
           @column_name_state = column_name.to_s
@@ -113,17 +116,17 @@ module ActiveRecord
             @model.class_eval "def #{method_name}; state_machine_expired?('#{column_name}', #{@expiry.to_i}); end", __FILE__, __LINE__
           end
 
-          named_scope_name = "with_expired_#{@from}_#{column_name}".to_sym
-          unless @model.respond_to?(named_scope_name)
-            @model.class_eval %Q(named_scope :#{named_scope_name}, lambda { { 
+          @expire_state_method_name = "#{@from}_#{column_name}_expire!"
+          unless @model.method_defined?(@expire_state_method_name.to_sym)
+            @model.class_eval "def #{@expire_state_method_name}; state_machine_expire_state!('#{column_name}', '#{@from}', 'save!'); end", __FILE__, __LINE__
+          end
+
+          @named_scope_name = "with_expired_#{@from}_#{column_name}".to_sym
+          unless @model.respond_to?(@named_scope_name)
+            @model.class_eval %Q(named_scope :#{@named_scope_name}, lambda { { 
               :conditions => [ " ( #{column_name}_changed_at < ? AND #{column_name} = ? ) ", Time.now.utc - #{@expiry}, "#{from.to_s}" ] } 
             }), __FILE__, __LINE__
           end
-        end
-
-        def state_expired?(record)
-          changed_at = record.send(@column_name_expiration)
-          (changed_at + @expiry).utc < Time.now
         end
 
       end
@@ -191,15 +194,12 @@ module ActiveRecord
 
       def has_states(*state_names, &block)
         include InstanceMethods unless self.respond_to?(:state_machines)
-
         options = state_names.extract_options!
         state_column = options[:in] || 'state'
-
         StateMachine.new(self, state_column, state_names, &block)
       end
 
       def expire_state(*state_names)
-
         # We first do a parse of all the states, and make sure we have
         # expiry scopes for them.
         state_names.each do |state_name|
@@ -207,21 +207,18 @@ module ActiveRecord
         end
 
         state_names.each do |state_name|
-
           # Now the magic happens. I loop through all the expiration
           # events, and see if any are expired, if they are, then I do my
           # thang.
           events = self.state_expiration_events[state_name]
-
           events.each_pair do |key, value|
-            puts key
-            puts value
-
-            # self.send(:"with_expired_#{state_name}").find_in_batches do |group|
+            self.send(value.named_scope_name).find_in_batches do |group|
+              group.each do |record|
+                record.send(value.expire_state_method_name)
+              end
+            end
           end
-
         end
-
       end
       
       module InstanceMethods
@@ -239,6 +236,16 @@ module ActiveRecord
         def state_machine_expired?(column_name, expiry)
           changed_at = self.send("#{column_name}_changed_at")
           (changed_at + expiry).utc < Time.now
+        end
+
+        def state_machine_expire_state!(column_name, from, save_method)
+          event = self.class.state_expiration_events[column_name.to_sym].try(:[], from.to_sym)
+          unless event.transition.guard?(self)
+            state = send("#{column_name}=", event.transition.to_state)
+            changed_at_column = "#{column_name}_changed_at="
+            send(changed_at_column, Time.now.utc) if self.respond_to?(changed_at_column)
+          end
+          self.send(save_method)
         end
 
         def fire_event(event_name, save_method)

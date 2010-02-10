@@ -48,7 +48,8 @@ protected
   def setup_db
     stdout = $stdout
 
-    ActiveRecord::Base.logger
+    # ActiveRecord::Base.logger
+#    ActiveRecord::Base.logger = Logger.new(STDOUT)
 
     # AR keeps printing annoying schema statements
     $stdout = StringIO.new
@@ -221,13 +222,14 @@ protected
 end
 
 class TicketWithStateExpiration < Ticket
-  has_states :open, :active, :stale do
+  has_states :open, :active, :stale, :abandoned do
     expires :open => :stale, :after => 30.days
+    expires :stale => :abandoned, :after => 10.days
     on :activate do
       transition :open => :active
     end
     on :stale do
-      transition :resolved => :active, :abandoned => :active
+      transition :active => :stale
     end
   end
 end
@@ -535,8 +537,7 @@ class ExpiredStatesTest < Test::Unit::TestCase
 
     ticket.update_attribute :state_changed_at, 31.days.ago
 
-    puts TicketWithStateExpiration.find(:all).inspect
-    expired_records = TicketWithStateExpiration.with_expired_open_state.find(:all, :conditions => { :foo => :bar })
+    expired_records = TicketWithStateExpiration.with_expired_open_state.find(:all)
     assert expired_records.include?(ticket)
 
     ticket.update_attribute :state_changed_at, 29.days.ago
@@ -546,8 +547,31 @@ class ExpiredStatesTest < Test::Unit::TestCase
 
   def test_should_automatically_expire_states
     ticket = create(TicketWithStateExpiration)
-    ticket.activate
     ticket.update_attribute :state_changed_at, 31.days.ago
+    assert ticket.open_state_expired?
+    TicketWithStateExpiration.expire_state(:state)
+    ticket.reload
+    assert_equal "stale", ticket.state
+  end
+
+
+  def test_should_automatically_expire_states_with_multiple_expires
+    ticket = create(TicketWithStateExpiration)
+    ticket.activate
+    ticket.stale
+    ticket.update_attribute :state_changed_at, 11.days.ago
+    assert ticket.stale_state_expired?
+    TicketWithStateExpiration.expire_state(:state)
+    ticket.reload
+    assert_equal "abandoned", ticket.state
+  end
+
+  def test_should_not_automatically_expire_states_with_multiple_expires
+    ticket = create(TicketWithStateExpiration)
+    ticket.activate
+    ticket.stale
+    ticket.update_attribute :state_changed_at, 9.days.ago
+    assert !ticket.stale_state_expired?
     TicketWithStateExpiration.expire_state(:state)
     ticket.reload
     assert_equal "stale", ticket.state

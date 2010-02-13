@@ -38,7 +38,13 @@ module ActiveRecord
           @model.class_eval %Q(define_callbacks "before_exit_#{state_name}", "after_exit_#{state_name}", "before_enter_#{state_name}", "after_enter_#{state_name}"), __FILE__, __LINE__
         end
         
-        @model.class_eval %Q(before_validation_on_create { |record| record.#{@column_name} = '#{@state_names.first}' if record.#{@column_name}.blank? }), __FILE__, __LINE__
+        @model.class_eval <<-BEFORE_VALIDATION
+          before_validation_on_create do |record| 
+            record.#{@column_name} = '#{@state_names.first}' if record.#{@column_name}.blank?
+            record.#{@column_name}_updated_at = Time.now.utc
+          end
+        BEFORE_VALIDATION
+
         @model.class_eval %Q(validates_state_of :#{@column_name}), __FILE__, __LINE__
 
         @model.class_eval <<-TRANSITIONS

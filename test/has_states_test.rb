@@ -492,12 +492,19 @@ class ConcurrentStatesTest < Test::Unit::TestCase
 end
 
 class ExpiredStatesTest < Test::Unit::TestCase
+
   def setup
     setup_db
   end
 
   def teardown
     teardown_db
+  end
+
+  def test_should_populate_state_changed_at_on_create
+    ticket = TicketWithStateExpiration.create(:problem => "test")
+    assert_not_nil ticket.state_updated_at
+    assert ticket.state_updated_at < Time.now.utc
   end
 
   def test_correctly_define_expiration

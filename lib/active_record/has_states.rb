@@ -106,7 +106,7 @@ module ActiveRecord
           @expiry = expiry
           @model = model
           @column_name_state = column_name.to_s
-          @column_name_expiration = "#{@column_name_state}_changed_at"
+          @column_name_expiration = "#{@column_name_state}_updated_at"
 
           @model.state_expiration_events[column_name.to_sym] ||= {}
           @model.state_expiration_events[column_name.to_sym][from.to_sym] = self
@@ -124,7 +124,7 @@ module ActiveRecord
           @named_scope_name = "with_expired_#{@from}_#{column_name}".to_sym
           unless @model.respond_to?(@named_scope_name)
             @model.class_eval %Q(named_scope :#{@named_scope_name}, lambda { { 
-              :conditions => [ " ( #{column_name}_changed_at < ? AND #{column_name} = ? ) ", Time.now.utc - #{@expiry}, "#{from.to_s}" ] } 
+              :conditions => [ " ( #{column_name}_updated_at < ? AND #{column_name} = ? ) ", Time.now.utc - #{@expiry}, "#{from.to_s}" ] } 
             }), __FILE__, __LINE__
           end
         end
@@ -227,16 +227,16 @@ module ActiveRecord
       protected
 
         def state_machine_expired?(column_name, expiry)
-          changed_at = self.send("#{column_name}_changed_at")
-          (changed_at + expiry).utc < Time.now
+          updated_at = self.send("#{column_name}_updated_at")
+          (updated_at + expiry).utc < Time.now
         end
 
         def state_machine_expire_state!(column_name, from, save_method)
           event = self.class.state_expiration_events[column_name.to_sym].try(:[], from.to_sym)
           unless event.transition.guard?(self)
             state = send("#{column_name}=", event.transition.to_state)
-            changed_at_column = "#{column_name}_changed_at="
-            send(changed_at_column, Time.now.utc) if self.respond_to?(changed_at_column)
+            updated_at_column = "#{column_name}_updated_at="
+            send(updated_at_column, Time.now.utc) if self.respond_to?(updated_at_column)
           end
           self.send(save_method)
         end
@@ -249,8 +249,8 @@ module ActiveRecord
           elsif transitions = event.transitions[send(attr_name)]
             if transition = transitions.find { |t| t.guard?(self) }
               state = send("#{attr_name}=", transition.to_state)
-              changed_at_column = "#{attr_name}_changed_at="
-              send(changed_at_column, Time.now.utc) if self.respond_to?(changed_at_column)
+              updated_at_column = "#{attr_name}_updated_at="
+              send(updated_at_column, Time.now.utc) if self.respond_to?(updated_at_column)
             else
               @event_error = [ :guarded_event, event ]
             end

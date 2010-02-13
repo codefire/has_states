@@ -199,18 +199,11 @@ module ActiveRecord
         StateMachine.new(self, state_column, state_names, &block)
       end
 
-      def expire_state(*state_names)
-        # We first do a parse of all the states, and make sure we have
-        # expiry scopes for them.
-        state_names.each do |state_name|
-          raise(ArgumentError, "no expiry events defined for: #{state_name}") unless self.state_expiration_events[state_name.to_sym]
-        end
-
-        state_names.each do |state_name|
-          # Now the magic happens. I loop through all the expiration
-          # events, and see if any are expired, if they are, then I do my
-          # thang.
-          events = self.state_expiration_events[state_name]
+      def expire_states
+        # Now the magic happens. I loop through all the expiration
+        # events, and see if any are expired, if they are, then I do my
+        # thang.
+        self.state_expiration_events.each_pair do |state_name, events|
           events.each_pair do |key, value|
             self.send(value.named_scope_name).find_in_batches do |group|
               group.each do |record|

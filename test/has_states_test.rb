@@ -549,7 +549,7 @@ class ExpiredStatesTest < Test::Unit::TestCase
     ticket = create(TicketWithStateExpiration)
     ticket.update_attribute :state_changed_at, 31.days.ago
     assert ticket.open_state_expired?
-    TicketWithStateExpiration.expire_state(:state)
+    TicketWithStateExpiration.expire_states
     ticket.reload
     assert_equal "stale", ticket.state
   end
@@ -561,7 +561,7 @@ class ExpiredStatesTest < Test::Unit::TestCase
     ticket.stale
     ticket.update_attribute :state_changed_at, 11.days.ago
     assert ticket.stale_state_expired?
-    TicketWithStateExpiration.expire_state(:state)
+    TicketWithStateExpiration.expire_states
     ticket.reload
     assert_equal "abandoned", ticket.state
   end
@@ -572,7 +572,7 @@ class ExpiredStatesTest < Test::Unit::TestCase
     ticket.stale
     ticket.update_attribute :state_changed_at, 9.days.ago
     assert !ticket.stale_state_expired?
-    TicketWithStateExpiration.expire_state(:state)
+    TicketWithStateExpiration.expire_states
     ticket.reload
     assert_equal "stale", ticket.state
   end

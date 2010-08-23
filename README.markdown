@@ -50,6 +50,23 @@ This is an attempt to make it work (the way I thought it should).
       end
     end
 
+## Timed States
+
+States can be expired automatically:
+
+    class Subscription < ActiveRecord::Base
+      has_states :trial, :expired do
+        expires :trial => :expired, :after => 30.days
+        ...
+      end
+    end
+
+And to expire them just call:
+
+    Subscription.expire_states
+
+You might like to put this in a cron job.
+
 ## Installation
 
     $ script/plugin install git://github.com/sbfaulkner/has_states.git
@@ -57,4 +74,5 @@ This is an attempt to make it work (the way I thought it should).
 ## Legal
 
 **Author:** S. Brent Faulkner <brentf@unwwwired.net>  
+**Updated:** D. Draper, K. Pitt, CodeFire <info@codefire.com.au>, 2010
 **License:** Copyright &copy; 2008 unwwwired.net, released under the MIT license
